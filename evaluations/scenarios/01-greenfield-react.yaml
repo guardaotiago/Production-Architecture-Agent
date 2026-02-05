@@ -1,0 +1,153 @@
+name: "Greenfield React+Vite Full Lifecycle"
+description: >
+  Starting a brand-new React+Vite project from scratch and driving it through
+  all 7 SDLC phases — from requirements gathering to production monitoring.
+  Validates that the orchestrator can initialise a project using the react-vite
+  template, enforce gate checks at every transition, and produce the expected
+  artifacts for each phase.
+
+phases_covered: [1, 2, 3, 4, 5, 6, 7]
+project_type: "react-vite"
+
+setup:
+  - description: "Create a clean temporary working directory"
+    command: "mktemp -d /tmp/eval-react-XXXXXX"
+  - description: "Initialise SDLC with react-vite template"
+    command: >
+      python scripts/init_sdlc.py
+        --project-name "eval-react-app"
+        --template react-vite
+        --output-dir $WORK_DIR
+  - description: "Verify .sdlc/state.json was created"
+    command: "test -f $WORK_DIR/.sdlc/state.json"
+
+steps:
+  - phase: "requirements"
+    action: "Create PRD document with acceptance criteria"
+    command: |
+      mkdir -p $WORK_DIR/docs
+      cat > $WORK_DIR/docs/prd.md <<'EOF'
+      # Product Requirements Document
+      ## Acceptance Criteria
+      - App renders a landing page with a hero section
+      - Navigation links route to About and Contact pages
+      - Responsive layout works on mobile and desktop
+      EOF
+    expected: "docs/prd.md exists and contains 'acceptance criteria'"
+
+  - phase: "requirements"
+    action: "Create user stories document"
+    command: |
+      cat > $WORK_DIR/docs/user-stories.md <<'EOF'
+      # User Stories
+      - As a visitor I can view the landing page
+      - As a visitor I can navigate between pages
+      EOF
+    expected: "docs/user-stories.md is created"
+
+  - phase: "requirements"
+    action: "Create technical feasibility assessment"
+    command: |
+      cat > $WORK_DIR/docs/tech-feasibility.md <<'EOF'
+      # Technical Feasibility
+      React + Vite stack is well-suited for this SPA.
+      EOF
+    expected: "docs/tech-feasibility.md is created"
+
+  - phase: "requirements"
+    action: "Record stakeholder sign-off in SDLC state"
+    command: >
+      python -c "
+      import json, pathlib;
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json');
+      s = json.loads(p.read_text());
+      s['phases']['requirements']['notes'].append('Stakeholder sign-off obtained on 2026-02-01');
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "State file has requirements sign-off note"
+
+  - phase: "requirements"
+    action: "Validate requirements gate"
+    command: "python scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR"
+    expected: "Exit code 0 — all 5 requirements gate criteria pass"
+
+  - phase: "development"
+    action: "Initialise git repo, pre-commit hooks, and README"
+    command: |
+      cd $WORK_DIR && git init
+      bash skills/02-development/scripts/setup_git_hooks.sh
+    expected: ".git directory exists, pre-commit and commit-msg hooks installed"
+
+  - phase: "development"
+    action: "Record code review process in SDLC state"
+    command: >
+      python -c "
+      import json, pathlib;
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json');
+      s = json.loads(p.read_text());
+      s['phases']['development']['notes'].append('Code review process: all PRs require 1 approval');
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "State records code review policy"
+
+  - phase: "cicd"
+    action: "Copy GitHub Actions CI workflow from SDLC assets"
+    command: |
+      mkdir -p $WORK_DIR/.github/workflows
+      cp skills/03-cicd/assets/github-actions/ci-node.yml $WORK_DIR/.github/workflows/ci.yml
+    expected: ".github/workflows/ci.yml exists"
+
+  - phase: "testing"
+    action: "Create a test plan and placeholder unit tests"
+    command: |
+      cat > $WORK_DIR/docs/test-plan.md <<'EOF'
+      # Test Plan
+      - Unit tests for all React components
+      - E2E tests for page navigation
+      EOF
+      mkdir -p $WORK_DIR/tests
+      echo "test('placeholder', () => expect(true).toBe(true));" > $WORK_DIR/tests/app.test.ts
+    expected: "docs/test-plan.md and tests/app.test.ts exist"
+
+  - phase: "deployment"
+    action: "Create deployment runbook and rollback procedure"
+    command: |
+      cat > $WORK_DIR/docs/deployment-runbook.md <<'EOF'
+      # Deployment Runbook
+      1. Build production bundle: npm run build
+      2. Deploy to CDN / static host
+      3. Run smoke tests against production URL
+      EOF
+      cat > $WORK_DIR/docs/rollback-procedure.md <<'EOF'
+      # Rollback Procedure
+      1. Re-deploy previous artifact version from CI registry
+      EOF
+    expected: "Deployment and rollback docs exist"
+
+assertions:
+  - description: "SDLC state file tracks all 7 phases"
+    type: "state_check"
+    target: "$WORK_DIR/.sdlc/state.json"
+    expected: "phases object contains keys: requirements, development, cicd, testing, uat, deployment, monitoring"
+
+  - description: "Requirements gate passes"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "PRD contains acceptance criteria"
+    type: "output_contains"
+    target: "cat $WORK_DIR/docs/prd.md"
+    expected: "Acceptance Criteria"
+
+  - description: "GitHub Actions workflow file exists"
+    type: "file_exists"
+    target: "$WORK_DIR/.github/workflows/ci.yml"
+    expected: true
+
+  - description: "Health dashboard reports non-zero score"
+    type: "output_contains"
+    target: "python scripts/project_health.py --project-dir $WORK_DIR"
+    expected: "health score"
+
+tags: ["full-lifecycle", "react", "greenfield", "all-phases", "template"]

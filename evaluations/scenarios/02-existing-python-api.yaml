@@ -1,0 +1,206 @@
+name: "Adopt SDLC on Existing Python FastAPI Project"
+description: >
+  A Python FastAPI project already has source code, a git repo, and a basic
+  README but lacks any formal SDLC process.  This scenario retrofits SDLC
+  tracking onto the existing codebase, backfills artifacts for earlier phases,
+  and then drives the project forward through CI/CD, testing, and deployment.
+
+phases_covered: [1, 2, 3, 4, 5, 6]
+project_type: "fastapi"
+
+setup:
+  - description: "Create a temporary directory simulating an existing FastAPI project"
+    command: "mktemp -d /tmp/eval-fastapi-XXXXXX"
+  - description: "Scaffold an existing Python project structure"
+    command: |
+      cd $WORK_DIR
+      git init
+      mkdir -p src/app tests docs
+      cat > src/app/main.py <<'EOF'
+      from fastapi import FastAPI
+      app = FastAPI()
+
+      @app.get("/health")
+      def health():
+          return {"status": "ok"}
+      EOF
+      cat > pyproject.toml <<'EOF'
+      [project]
+      name = "existing-api"
+      version = "0.2.0"
+      requires-python = ">=3.10"
+      dependencies = ["fastapi>=0.100", "uvicorn>=0.23"]
+      EOF
+      echo "# Existing API" > README.md
+      git add -A && git commit -m "chore: initial existing code"
+  - description: "Initialise SDLC tracking on the existing project (no template)"
+    command: "python scripts/init_sdlc.py --project-name 'existing-api' --output-dir $WORK_DIR"
+
+steps:
+  - phase: "requirements"
+    action: "Backfill a PRD for the existing project"
+    command: |
+      cat > $WORK_DIR/docs/prd.md <<'EOF'
+      # PRD — Existing API
+      ## Goals
+      Provide a health-check endpoint and user management CRUD.
+      ## Acceptance Criteria
+      - GET /health returns 200
+      - CRUD endpoints for /users
+      EOF
+    expected: "docs/prd.md created with acceptance criteria"
+
+  - phase: "requirements"
+    action: "Backfill user stories"
+    command: |
+      cat > $WORK_DIR/docs/user-stories.md <<'EOF'
+      # User Stories
+      - As an operator I can check service health
+      - As an admin I can create, read, update, delete users
+      EOF
+    expected: "docs/user-stories.md created"
+
+  - phase: "requirements"
+    action: "Backfill tech feasibility and record sign-off"
+    command: |
+      cat > $WORK_DIR/docs/tech-feasibility.md <<'EOF'
+      # Technical Feasibility
+      FastAPI is already in production; no migration risk.
+      EOF
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['requirements']['notes'].append('Stakeholder sign-off: retroactive approval')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "tech-feasibility.md exists and sign-off note recorded"
+
+  - phase: "development"
+    action: "Install pre-commit hooks and record code review process"
+    command: |
+      cd $WORK_DIR
+      bash $ORCHESTRATOR_ROOT/skills/02-development/scripts/setup_git_hooks.sh
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['development']['notes'].append('Code review via GitHub PRs, 1 approval required')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "Git hooks installed; code review note in state"
+
+  - phase: "development"
+    action: "Create .pre-commit-config.yaml for the gate check"
+    command: |
+      cat > $WORK_DIR/.pre-commit-config.yaml <<'EOF'
+      repos:
+        - repo: https://github.com/astral-sh/ruff-pre-commit
+          rev: v0.3.0
+          hooks:
+            - id: ruff
+            - id: ruff-format
+      EOF
+    expected: ".pre-commit-config.yaml exists"
+
+  - phase: "cicd"
+    action: "Set up GitHub Actions CI for Python"
+    command: |
+      mkdir -p $WORK_DIR/.github/workflows
+      cp $ORCHESTRATOR_ROOT/skills/03-cicd/assets/github-actions/ci-python.yml \
+         $WORK_DIR/.github/workflows/ci.yml
+    expected: ".github/workflows/ci.yml exists"
+
+  - phase: "cicd"
+    action: "Record CI/CD build, test, and verification notes"
+    command: >
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      notes = s['phases']['cicd']['notes']
+      notes.append('Build step: pip install + ruff check')
+      notes.append('Test step: pytest --cov')
+      notes.append('Pipeline verified end-to-end locally')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "cicd phase notes contain build, test, verified"
+
+  - phase: "testing"
+    action: "Generate unit tests and a test plan"
+    command: |
+      cat > $WORK_DIR/docs/test-plan.md <<'EOF'
+      # Test Plan
+      - Unit tests for each endpoint
+      - Integration tests with TestClient
+      EOF
+      cat > $WORK_DIR/tests/test_health.py <<'EOF'
+      from fastapi.testclient import TestClient
+      from src.app.main import app
+
+      client = TestClient(app)
+
+      def test_health_endpoint():
+          response = client.get("/health")
+          assert response.status_code == 200
+          assert response.json() == {"status": "ok"}
+      EOF
+    expected: "test_health.py and test-plan.md exist"
+
+  - phase: "testing"
+    action: "Record coverage and bug resolution"
+    command: >
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      notes = s['phases']['testing']['notes']
+      notes.append('Coverage at 85% — meets threshold')
+      notes.append('All critical bugs resolved')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "testing notes record coverage and bugs resolved"
+
+  - phase: "deployment"
+    action: "Create deployment documentation using Docker"
+    command: |
+      cp $ORCHESTRATOR_ROOT/skills/03-cicd/assets/docker/Dockerfile.python $WORK_DIR/Dockerfile
+      cat > $WORK_DIR/docs/deployment-runbook.md <<'EOF'
+      # Deployment Runbook
+      1. Build Docker image: docker build -t existing-api .
+      2. Push to registry
+      3. Deploy via docker-compose up -d
+      EOF
+      cat > $WORK_DIR/docs/rollback-procedure.md <<'EOF'
+      # Rollback
+      Roll back to previous image tag in registry.
+      EOF
+    expected: "Dockerfile and deployment docs exist"
+
+assertions:
+  - description: "SDLC state file was created on an existing project"
+    type: "file_exists"
+    target: "$WORK_DIR/.sdlc/state.json"
+    expected: true
+
+  - description: "Requirements gate passes after backfill"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "Development gate passes with hooks and README"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase development --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "Existing source code is preserved (main.py unchanged)"
+    type: "output_contains"
+    target: "cat $WORK_DIR/src/app/main.py"
+    expected: "FastAPI"
+
+  - description: "Project health dashboard runs without error"
+    type: "exit_code"
+    target: "python scripts/project_health.py --project-dir $WORK_DIR"
+    expected: 0
+
+tags: ["existing-project", "python", "fastapi", "retroactive", "backfill"]

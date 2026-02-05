@@ -1,0 +1,220 @@
+name: "Multi-Phase Transition with Gate Enforcement"
+description: >
+  Moving a project from development through CI/CD, testing, and UAT in
+  sequence.  At each phase boundary the gate validator must pass before the
+  SDLC state advances to the next phase.  This scenario validates the
+  sequential gate enforcement and state transitions, including one deliberate
+  gate failure that must be fixed before progressing.
+
+phases_covered: [2, 3, 4, 5]
+project_type: "generic"
+
+setup:
+  - description: "Create a temporary project directory"
+    command: "mktemp -d /tmp/eval-transition-XXXXXX"
+  - description: "Initialise SDLC and mark requirements as already completed"
+    command: |
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py \
+        --project-name "multi-phase-app" --output-dir $WORK_DIR
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['requirements']['status'] = 'completed'
+      s['phases']['requirements']['gate_passed'] = True
+      s['phases']['requirements']['notes'].append('Stakeholder sign-off obtained')
+      s['current_phase'] = 'development'
+      s['phases']['development']['status'] = 'in_progress'
+      p.write_text(json.dumps(s, indent=2))
+      "
+  - description: "Create requirements artifacts to satisfy any backwards checks"
+    command: |
+      mkdir -p $WORK_DIR/docs
+      cat > $WORK_DIR/docs/prd.md <<'EOF'
+      # PRD
+      ## Acceptance Criteria
+      - App supports user login and data display
+      EOF
+      echo "# User Stories" > $WORK_DIR/docs/user-stories.md
+      echo "# Tech Feasibility" > $WORK_DIR/docs/tech-feasibility.md
+
+steps:
+  - phase: "development"
+    action: "Set up development environment — git, hooks, README"
+    command: |
+      cd $WORK_DIR && git init
+      echo "# multi-phase-app" > $WORK_DIR/README.md
+      cat > $WORK_DIR/.pre-commit-config.yaml <<'EOF'
+      repos:
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          rev: v4.5.0
+          hooks: [{id: trailing-whitespace}]
+      EOF
+      echo "# Git Workflow: trunk-based" > $WORK_DIR/docs/git-workflow-guide.md
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['development']['notes'].append('Code review process: PR-based, 1 approval')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "Git initialized, hooks configured, README and workflow docs present"
+
+  - phase: "development"
+    action: "Validate development gate and advance to CI/CD"
+    command: |
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase development --project-dir $WORK_DIR
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['development']['status'] = 'completed'
+      s['phases']['development']['gate_passed'] = True
+      s['current_phase'] = 'cicd'
+      s['phases']['cicd']['status'] = 'in_progress'
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "Development gate passes; state advances to cicd"
+
+  - phase: "cicd"
+    action: "Set up CI pipeline and linting"
+    command: |
+      mkdir -p $WORK_DIR/.github/workflows
+      cp $ORCHESTRATOR_ROOT/skills/03-cicd/assets/github-actions/ci-node.yml \
+         $WORK_DIR/.github/workflows/ci.yml
+      echo '{"extends": ["eslint:recommended"]}' > $WORK_DIR/.eslintrc.json
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      notes = s['phases']['cicd']['notes']
+      notes.append('Build step: npm ci && npm run build')
+      notes.append('Test step: npm test')
+      notes.append('Pipeline verified on feature branch')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "CI workflow, linting config, and state notes in place"
+
+  - phase: "cicd"
+    action: "Validate CI/CD gate and advance to testing"
+    command: |
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase cicd --project-dir $WORK_DIR
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['cicd']['status'] = 'completed'
+      s['phases']['cicd']['gate_passed'] = True
+      s['current_phase'] = 'testing'
+      s['phases']['testing']['status'] = 'in_progress'
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "CI/CD gate passes; state advances to testing"
+
+  - phase: "testing"
+    action: "Create tests, test plan, and coverage — but omit bug resolution note"
+    command: |
+      mkdir -p $WORK_DIR/tests
+      echo "test('placeholder', () => expect(true).toBe(true));" > $WORK_DIR/tests/app.test.js
+      cat > $WORK_DIR/docs/test-plan.md <<'EOF'
+      # Test Plan
+      - Unit tests for core modules
+      - Integration tests for API layer
+      EOF
+      mkdir -p $WORK_DIR/coverage
+      echo "coverage report" > $WORK_DIR/coverage/lcov.info
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['testing']['notes'].append('Coverage at 82% — above threshold')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "Tests and coverage present, but bugs-resolved note is deliberately missing"
+
+  - phase: "testing"
+    action: "Attempt testing gate — should be BLOCKED (missing bugs-resolved note)"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase testing --project-dir $WORK_DIR"
+    expected: "Exit code 1 — blocked because 'bugs resolved' note is missing"
+
+  - phase: "testing"
+    action: "Add the missing bugs-resolved note and re-validate"
+    command: |
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['testing']['notes'].append('All critical bugs resolved')
+      p.write_text(json.dumps(s, indent=2))
+      "
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase testing --project-dir $WORK_DIR
+    expected: "Exit code 0 — testing gate now passes"
+
+  - phase: "testing"
+    action: "Advance state to UAT phase"
+    command: >
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['testing']['status'] = 'completed'
+      s['phases']['testing']['gate_passed'] = True
+      s['current_phase'] = 'uat'
+      s['phases']['uat']['status'] = 'in_progress'
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "State advances to UAT"
+
+  - phase: "uat"
+    action: "Create UAT plan and record execution and sign-off"
+    command: |
+      cat > $WORK_DIR/docs/uat-plan.md <<'EOF'
+      # UAT Plan
+      - Test user login flow
+      - Test data display accuracy
+      - Test edge cases from user stories
+      EOF
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      notes = s['phases']['uat']['notes']
+      notes.append('UAT environment provisioned on staging')
+      notes.append('All UAT cases executed — 12/12 passed')
+      notes.append('Stakeholder sign-off obtained from product owner')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "UAT plan created; environment, execution, and sign-off recorded"
+
+  - phase: "uat"
+    action: "Validate UAT gate"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase uat --project-dir $WORK_DIR"
+    expected: "Exit code 0 — UAT gate passes"
+
+assertions:
+  - description: "Development gate passed and recorded in state"
+    type: "state_check"
+    target: "$WORK_DIR/.sdlc/state.json"
+    expected: "phases.development.gate_passed is true"
+
+  - description: "CI/CD gate passed and recorded in state"
+    type: "state_check"
+    target: "$WORK_DIR/.sdlc/state.json"
+    expected: "phases.cicd.gate_passed is true"
+
+  - description: "Testing gate was initially blocked (negative test logged)"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase testing --project-dir $WORK_DIR_BEFORE_FIX"
+    expected: 1
+
+  - description: "UAT gate passes at end of scenario"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase uat --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "Current phase in state.json is uat after all transitions"
+    type: "state_check"
+    target: "$WORK_DIR/.sdlc/state.json"
+    expected: "current_phase is 'uat'"
+
+tags: ["multi-phase", "transition", "gate-enforcement", "sequential", "blocking", "development", "cicd", "testing", "uat"]

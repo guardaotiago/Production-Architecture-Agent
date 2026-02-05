@@ -1,0 +1,157 @@
+name: "Template Scaffolding for All Project Types"
+description: >
+  Uses each available project template (react-vite, fastapi, nextjs) to
+  scaffold new projects via init_sdlc.py and verifies that the resulting
+  directory structure, SDLC state, and phase checklists are correct.
+  Also validates that the init_project.sh script produces the expected
+  scaffolding for node, python, and go project types.
+
+phases_covered: [1, 2]
+project_type: "generic"
+
+setup:
+  - description: "Create parent directory to hold all three template projects"
+    command: "mktemp -d /tmp/eval-templates-XXXXXX"
+  - description: "Create subdirectories for each template test"
+    command: |
+      mkdir -p $WORK_DIR/react-project
+      mkdir -p $WORK_DIR/fastapi-project
+      mkdir -p $WORK_DIR/nextjs-project
+      mkdir -p $WORK_DIR/node-scaffold
+      mkdir -p $WORK_DIR/python-scaffold
+      mkdir -p $WORK_DIR/go-scaffold
+
+steps:
+  - phase: "requirements"
+    action: "Scaffold a React+Vite project using the react-vite template"
+    command: >
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py
+        --project-name "my-react-app"
+        --template react-vite
+        --output-dir $WORK_DIR/react-project
+    expected: ".sdlc/state.json created, react-typescript-vite template files copied"
+
+  - phase: "requirements"
+    action: "Verify React project has SDLC state and phase checklists"
+    command: |
+      test -f $WORK_DIR/react-project/.sdlc/state.json
+      test -f $WORK_DIR/react-project/.sdlc/phases/01-requirements.md
+      test -f $WORK_DIR/react-project/.sdlc/phases/07-monitoring.md
+    expected: "state.json and all 7 phase checklists exist"
+
+  - phase: "requirements"
+    action: "Verify React project state has correct project name and initial phase"
+    command: >
+      python -c "
+      import json, pathlib
+      s = json.loads(pathlib.Path('$WORK_DIR/react-project/.sdlc/state.json').read_text())
+      assert s['project_name'] == 'my-react-app', f'Wrong name: {s[\"project_name\"]}'
+      assert s['current_phase'] == 'requirements', f'Wrong phase: {s[\"current_phase\"]}'
+      assert len(s['phases']) == 7, f'Wrong phase count: {len(s[\"phases\"])}'
+      print('React project state validated')
+      "
+    expected: "project_name is my-react-app, current_phase is requirements, 7 phases tracked"
+
+  - phase: "requirements"
+    action: "Scaffold a FastAPI project using the fastapi template"
+    command: >
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py
+        --project-name "my-fastapi-service"
+        --template fastapi
+        --output-dir $WORK_DIR/fastapi-project
+    expected: ".sdlc directory created with python-fastapi template files"
+
+  - phase: "requirements"
+    action: "Verify FastAPI project state"
+    command: >
+      python -c "
+      import json, pathlib
+      s = json.loads(pathlib.Path('$WORK_DIR/fastapi-project/.sdlc/state.json').read_text())
+      assert s['project_name'] == 'my-fastapi-service'
+      assert s['current_phase'] == 'requirements'
+      print('FastAPI project state validated')
+      "
+    expected: "FastAPI project has correct name and initial phase"
+
+  - phase: "requirements"
+    action: "Scaffold a Next.js project using the nextjs template"
+    command: >
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py
+        --project-name "my-nextjs-site"
+        --template nextjs
+        --output-dir $WORK_DIR/nextjs-project
+    expected: ".sdlc directory created with nextjs-typescript template files"
+
+  - phase: "requirements"
+    action: "Verify Next.js project state"
+    command: >
+      python -c "
+      import json, pathlib
+      s = json.loads(pathlib.Path('$WORK_DIR/nextjs-project/.sdlc/state.json').read_text())
+      assert s['project_name'] == 'my-nextjs-site'
+      assert s['current_phase'] == 'requirements'
+      print('Next.js project state validated')
+      "
+    expected: "Next.js project has correct name and initial phase"
+
+  - phase: "development"
+    action: "Scaffold a Node.js project using init_project.sh"
+    command: |
+      cd $WORK_DIR/node-scaffold
+      bash $ORCHESTRATOR_ROOT/skills/02-development/scripts/init_project.sh \
+        --name "node-app" --type node
+    expected: "node-app/ directory created with package.json, tsconfig.json, src/index.ts, .git"
+
+  - phase: "development"
+    action: "Scaffold a Python project using init_project.sh"
+    command: |
+      cd $WORK_DIR/python-scaffold
+      bash $ORCHESTRATOR_ROOT/skills/02-development/scripts/init_project.sh \
+        --name "python-app" --type python
+    expected: "python-app/ directory created with pyproject.toml, src/python_app/, tests/, .git"
+
+  - phase: "development"
+    action: "Scaffold a Go project using init_project.sh"
+    command: |
+      cd $WORK_DIR/go-scaffold
+      bash $ORCHESTRATOR_ROOT/skills/02-development/scripts/init_project.sh \
+        --name "go-service" --type go
+    expected: "go-service/ directory created with go.mod, cmd/main.go, Makefile, .git"
+
+assertions:
+  - description: "React project .sdlc/state.json exists"
+    type: "file_exists"
+    target: "$WORK_DIR/react-project/.sdlc/state.json"
+    expected: true
+
+  - description: "FastAPI project .sdlc/state.json exists"
+    type: "file_exists"
+    target: "$WORK_DIR/fastapi-project/.sdlc/state.json"
+    expected: true
+
+  - description: "Next.js project .sdlc/state.json exists"
+    type: "file_exists"
+    target: "$WORK_DIR/nextjs-project/.sdlc/state.json"
+    expected: true
+
+  - description: "Node scaffold has package.json"
+    type: "file_exists"
+    target: "$WORK_DIR/node-scaffold/node-app/package.json"
+    expected: true
+
+  - description: "Python scaffold has pyproject.toml"
+    type: "file_exists"
+    target: "$WORK_DIR/python-scaffold/python-app/pyproject.toml"
+    expected: true
+
+  - description: "Go scaffold has go.mod"
+    type: "file_exists"
+    target: "$WORK_DIR/go-scaffold/go-service/go.mod"
+    expected: true
+
+  - description: "All template projects start in requirements phase"
+    type: "state_check"
+    target: "$WORK_DIR/react-project/.sdlc/state.json"
+    expected: "current_phase is 'requirements'"
+
+tags: ["template", "scaffolding", "react-vite", "fastapi", "nextjs", "node", "python", "go", "init"]

@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Multi-stage Dockerfile for Node.js applications
+# ---------------------------------------------------------------------------
+# Build:   docker build -f Dockerfile.node -t myapp:latest .
+# Run:     docker run -p 3000:3000 myapp:latest
+# ---------------------------------------------------------------------------
+
+# --- Builder stage --------------------------------------------------------
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install dependencies first (layer caching)
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+
+# Copy source and build
+COPY . .
+RUN npm run build
+
+# Prune dev dependencies for production
+RUN npm ci --omit=dev --ignore-scripts
+
+# --- Runner stage ---------------------------------------------------------
+FROM node:20-alpine AS runner
+
+# Security: run as non-root user
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -S appuser -u 1001 -G appgroup
+
+WORKDIR /app
+
+# Copy only production artifacts
+COPY --from=builder --chown=appuser:appgroup /app/node_modules ./node_modules
+COPY --from=builder --chown=appuser:appgroup /app/dist ./dist
+COPY --from=builder --chown=appuser:appgroup /app/package.json ./package.json
+
+USER appuser
+
+EXPOSE 3000
+
+ENV NODE_ENV=production
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+CMD ["node", "dist/index.js"]

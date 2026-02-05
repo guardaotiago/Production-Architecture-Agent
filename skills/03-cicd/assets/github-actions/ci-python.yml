@@ -1,0 +1,71 @@
+name: CI - Python
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+      fail-fast: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff pytest pytest-cov mypy bandit
+
+      - name: Lint with ruff
+        run: ruff check .
+
+      - name: Format check with ruff
+        run: ruff format --check .
+
+      - name: Type check with mypy
+        run: mypy . --ignore-missing-imports
+
+      - name: Test with pytest and coverage
+        run: |
+          pytest --cov=. --cov-report=xml --cov-report=html --junitxml=report.xml -v
+        env:
+          CI: true
+
+      - name: Upload coverage artifact
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 7
+
+      - name: Security scan with bandit
+        run: bandit -r . -x ./tests -f json -o bandit-report.json || true
+
+      - name: Upload bandit report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          retention-days: 7

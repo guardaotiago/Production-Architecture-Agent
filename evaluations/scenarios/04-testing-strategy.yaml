@@ -1,0 +1,161 @@
+name: "Comprehensive Testing Strategy for Zero-Test Project"
+description: >
+  A project with source code but absolutely no tests.  This scenario exercises
+  the testing phase: generating a test plan, writing unit and integration tests,
+  setting up coverage reporting, resolving bugs, and verifying the testing gate
+  passes.  Also validates that the gate correctly blocks advancement when
+  coverage thresholds are not met.
+
+phases_covered: [4]
+project_type: "fastapi"
+
+setup:
+  - description: "Create a temporary project with source but no tests"
+    command: "mktemp -d /tmp/eval-testing-XXXXXX"
+  - description: "Bootstrap a Python project with code and SDLC tracking"
+    command: |
+      cd $WORK_DIR
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py \
+        --project-name "zero-tests-api" --output-dir $WORK_DIR
+      mkdir -p src/app tests docs
+      cat > src/app/main.py <<'EOF'
+      from fastapi import FastAPI
+      app = FastAPI()
+
+      @app.get("/")
+      def root():
+          return {"message": "hello"}
+
+      @app.get("/items/{item_id}")
+      def get_item(item_id: int):
+          return {"item_id": item_id}
+      EOF
+      cat > pyproject.toml <<'EOF'
+      [project]
+      name = "zero-tests-api"
+      version = "0.1.0"
+      dependencies = ["fastapi", "uvicorn"]
+      [tool.pytest.ini_options]
+      testpaths = ["tests"]
+      EOF
+      git init && git add -A && git commit -m "chore: initial code, no tests"
+  - description: "Confirm there are zero test files"
+    command: "test $(find $WORK_DIR/tests -name '*.py' -not -name '__init__.py' | wc -l) -eq 0"
+
+steps:
+  - phase: "testing"
+    action: "Create a formal test plan document"
+    command: |
+      cat > $WORK_DIR/docs/test-plan.md <<'EOF'
+      # Test Plan — zero-tests-api
+      ## Scope
+      - Unit tests for every endpoint handler
+      - Integration tests using FastAPI TestClient
+      - Target coverage: 85%
+      ## Exit Criteria
+      - All tests pass
+      - Coverage >= 80%
+      - No critical bugs open
+      EOF
+    expected: "docs/test-plan.md created"
+
+  - phase: "testing"
+    action: "Write unit tests for the root endpoint"
+    command: |
+      cat > $WORK_DIR/tests/__init__.py <<'EOF'
+      EOF
+      cat > $WORK_DIR/tests/test_root.py <<'EOF'
+      from fastapi.testclient import TestClient
+      from src.app.main import app
+
+      client = TestClient(app)
+
+      def test_root_returns_200():
+          response = client.get("/")
+          assert response.status_code == 200
+
+      def test_root_returns_hello():
+          response = client.get("/")
+          assert response.json() == {"message": "hello"}
+      EOF
+    expected: "tests/test_root.py exists with 2 test functions"
+
+  - phase: "testing"
+    action: "Write unit tests for the items endpoint"
+    command: |
+      cat > $WORK_DIR/tests/test_items.py <<'EOF'
+      from fastapi.testclient import TestClient
+      from src.app.main import app
+
+      client = TestClient(app)
+
+      def test_get_item_valid_id():
+          response = client.get("/items/42")
+          assert response.status_code == 200
+          assert response.json() == {"item_id": 42}
+
+      def test_get_item_invalid_id_returns_422():
+          response = client.get("/items/not-a-number")
+          assert response.status_code == 422
+      EOF
+    expected: "tests/test_items.py exists with 2 test functions"
+
+  - phase: "testing"
+    action: "Simulate running tests and generating a coverage report"
+    command: |
+      mkdir -p $WORK_DIR/htmlcov
+      echo "<html><body>Coverage: 87%</body></html>" > $WORK_DIR/htmlcov/index.html
+      touch $WORK_DIR/.coverage
+    expected: "htmlcov/ and .coverage exist (simulated coverage artifacts)"
+
+  - phase: "testing"
+    action: "Attempt gate check BEFORE recording coverage — expect failure"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase testing --project-dir $WORK_DIR"
+    expected: "Exit code 1 — gate blocked because coverage and bugs-resolved notes are missing"
+
+  - phase: "testing"
+    action: "Record coverage threshold and bug resolution in state"
+    command: >
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      notes = s['phases']['testing']['notes']
+      notes.append('Coverage at 87% — exceeds 80% threshold')
+      notes.append('All critical bugs resolved — zero open P0/P1')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "State has testing notes for coverage and bugs resolved"
+
+  - phase: "testing"
+    action: "Re-run gate check — expect pass now"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase testing --project-dir $WORK_DIR"
+    expected: "Exit code 0 — all testing gate criteria pass"
+
+assertions:
+  - description: "Test plan document exists"
+    type: "file_exists"
+    target: "$WORK_DIR/docs/test-plan.md"
+    expected: true
+
+  - description: "At least 2 test files present"
+    type: "output_contains"
+    target: "find $WORK_DIR/tests -name 'test_*.py' | wc -l"
+    expected: "2"
+
+  - description: "Coverage artifacts exist"
+    type: "file_exists"
+    target: "$WORK_DIR/.coverage"
+    expected: true
+
+  - description: "Testing gate passes after recording notes"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase testing --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "Gate was blocked before notes were added (negative test)"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase testing --project-dir $WORK_DIR_BEFORE_NOTES"
+    expected: 1
+
+tags: ["testing", "zero-tests", "coverage", "gate-blocking", "python", "fastapi"]

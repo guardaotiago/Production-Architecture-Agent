@@ -1,0 +1,131 @@
+name: "GitHub Actions CI/CD for Node.js with Docker"
+description: >
+  Setting up a complete GitHub Actions CI/CD pipeline for a Node.js project.
+  The pipeline includes build, lint, test, Docker image build, and deployment
+  stages.  Validates that the orchestrator produces correct workflow YAML,
+  a working Dockerfile, and that the CI/CD gate criteria are satisfied.
+
+phases_covered: [2, 3]
+project_type: "generic"
+
+setup:
+  - description: "Create a temporary Node.js project directory"
+    command: "mktemp -d /tmp/eval-cicd-XXXXXX"
+  - description: "Scaffold a basic Node.js project with SDLC tracking"
+    command: |
+      cd $WORK_DIR
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py \
+        --project-name "node-cicd-eval" --output-dir $WORK_DIR
+      bash $ORCHESTRATOR_ROOT/skills/02-development/scripts/init_project.sh \
+        --name . --type node 2>/dev/null || true
+      git init
+  - description: "Ensure package.json exists for project type detection"
+    command: "test -f $WORK_DIR/package.json"
+
+steps:
+  - phase: "development"
+    action: "Install pre-commit and commit-msg hooks"
+    command: |
+      cd $WORK_DIR
+      bash $ORCHESTRATOR_ROOT/skills/02-development/scripts/setup_git_hooks.sh
+    expected: ".git/hooks/pre-commit and .git/hooks/commit-msg are executable"
+
+  - phase: "development"
+    action: "Create .pre-commit-config.yaml and record code review"
+    command: |
+      cat > $WORK_DIR/.pre-commit-config.yaml <<'EOF'
+      repos:
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          rev: v4.5.0
+          hooks:
+            - id: trailing-whitespace
+            - id: end-of-file-fixer
+      EOF
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['development']['notes'].append('Code review: PR-based, 1 approval')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: ".pre-commit-config.yaml exists and code review note recorded"
+
+  - phase: "cicd"
+    action: "Copy the Node.js GitHub Actions CI template"
+    command: |
+      mkdir -p $WORK_DIR/.github/workflows
+      cp $ORCHESTRATOR_ROOT/skills/03-cicd/assets/github-actions/ci-node.yml \
+         $WORK_DIR/.github/workflows/ci.yml
+    expected: ".github/workflows/ci.yml exists with Node.js CI steps"
+
+  - phase: "cicd"
+    action: "Copy the Docker assets for Node.js deployment"
+    command: |
+      cp $ORCHESTRATOR_ROOT/skills/03-cicd/assets/docker/Dockerfile.node $WORK_DIR/Dockerfile
+      cp $ORCHESTRATOR_ROOT/skills/03-cicd/assets/docker/docker-compose.yml $WORK_DIR/docker-compose.yml
+    expected: "Dockerfile and docker-compose.yml exist in project root"
+
+  - phase: "cicd"
+    action: "Add an ESLint config so the linting gate criterion passes"
+    command: |
+      cat > $WORK_DIR/.eslintrc.json <<'EOF'
+      {
+        "env": { "node": true, "es2021": true },
+        "extends": ["eslint:recommended"],
+        "rules": {}
+      }
+      EOF
+    expected: ".eslintrc.json exists"
+
+  - phase: "cicd"
+    action: "Record CI/CD build, test, and verification notes in state"
+    command: >
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      notes = s['phases']['cicd']['notes']
+      notes.append('Build step: npm ci && npm run build')
+      notes.append('Test step: npm test with jest')
+      notes.append('Pipeline verified against a feature branch push')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "CI/CD notes include build, test, and verified keywords"
+
+  - phase: "cicd"
+    action: "Run gate validator for the CI/CD phase"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase cicd --project-dir $WORK_DIR"
+    expected: "Exit code 0 — all CI/CD gate criteria pass"
+
+  - phase: "cicd"
+    action: "Validate the GitHub Actions YAML is well-formed"
+    command: "python -c \"import yaml; yaml.safe_load(open('$WORK_DIR/.github/workflows/ci.yml'))\""
+    expected: "YAML parses without error"
+
+assertions:
+  - description: "CI workflow file exists"
+    type: "file_exists"
+    target: "$WORK_DIR/.github/workflows/ci.yml"
+    expected: true
+
+  - description: "Dockerfile exists"
+    type: "file_exists"
+    target: "$WORK_DIR/Dockerfile"
+    expected: true
+
+  - description: "CI/CD gate passes"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase cicd --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "Linting config present (eslintrc)"
+    type: "file_exists"
+    target: "$WORK_DIR/.eslintrc.json"
+    expected: true
+
+  - description: "docker-compose.yml present for deployment"
+    type: "file_exists"
+    target: "$WORK_DIR/docker-compose.yml"
+    expected: true
+
+tags: ["cicd", "github-actions", "node", "docker", "pipeline"]

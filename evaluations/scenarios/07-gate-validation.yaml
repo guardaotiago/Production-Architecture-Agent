@@ -1,0 +1,149 @@
+name: "Gate Validation Blocks Phase Advancement"
+description: >
+  Tests that the gate validation system correctly blocks advancement to the next
+  phase when required criteria are not met.  Each step intentionally leaves out
+  one or more gate requirements and verifies the gate_validator exits with
+  code 1 (blocked).  Then the missing artifacts are added and the gate is
+  re-checked.  Covers requirements, development, and CI/CD phase gates.
+
+phases_covered: [1, 2, 3]
+project_type: "generic"
+
+setup:
+  - description: "Create a clean temporary project directory"
+    command: "mktemp -d /tmp/eval-gate-XXXXXX"
+  - description: "Initialise SDLC tracking with no template"
+    command: >
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py
+        --project-name "gate-test-project"
+        --output-dir $WORK_DIR
+
+steps:
+  - phase: "requirements"
+    action: "Run requirements gate with zero artifacts — should be BLOCKED"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR"
+    expected: "Exit code 1 — gate blocked (no PRD, no user stories, no sign-off)"
+
+  - phase: "requirements"
+    action: "Add PRD but omit user stories — gate should still be blocked"
+    command: |
+      mkdir -p $WORK_DIR/docs
+      cat > $WORK_DIR/docs/prd.md <<'EOF'
+      # PRD
+      ## Acceptance Criteria
+      - Feature A works as described
+      EOF
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR
+    expected: "Exit code 1 — gate blocked (user stories and sign-off still missing)"
+
+  - phase: "requirements"
+    action: "Add user stories and tech feasibility but no sign-off"
+    command: |
+      echo "# User Stories" > $WORK_DIR/docs/user-stories.md
+      echo "# Tech Feasibility" > $WORK_DIR/docs/tech-feasibility.md
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR
+    expected: "Exit code 1 — gate blocked (stakeholder sign-off note missing)"
+
+  - phase: "requirements"
+    action: "Add sign-off note — gate should now PASS"
+    command: |
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['requirements']['notes'].append('Stakeholder sign-off recorded')
+      p.write_text(json.dumps(s, indent=2))
+      "
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR
+    expected: "Exit code 0 — requirements gate passes"
+
+  - phase: "development"
+    action: "Run development gate with no git repo — should be BLOCKED"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase development --project-dir $WORK_DIR"
+    expected: "Exit code 1 — no .git directory, no hooks, no README"
+
+  - phase: "development"
+    action: "Init git, add README, but omit hooks and code review — still blocked"
+    command: |
+      cd $WORK_DIR && git init
+      echo "# gate-test-project" > $WORK_DIR/README.md
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase development --project-dir $WORK_DIR
+    expected: "Exit code 1 — .pre-commit-config.yaml missing, branching strategy doc missing, code review note missing"
+
+  - phase: "development"
+    action: "Add all remaining development artifacts — gate should PASS"
+    command: |
+      cat > $WORK_DIR/.pre-commit-config.yaml <<'EOF'
+      repos:
+        - repo: https://github.com/pre-commit/pre-commit-hooks
+          rev: v4.5.0
+          hooks: [{id: trailing-whitespace}]
+      EOF
+      echo "# Git Workflow" > $WORK_DIR/docs/git-workflow.md
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['development']['notes'].append('Code review: all PRs need 1 approval')
+      p.write_text(json.dumps(s, indent=2))
+      "
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase development --project-dir $WORK_DIR
+    expected: "Exit code 0 — development gate passes"
+
+  - phase: "cicd"
+    action: "Run CI/CD gate with no pipeline — should be BLOCKED"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase cicd --project-dir $WORK_DIR"
+    expected: "Exit code 1 — no CI config, no linting config, no state notes"
+
+  - phase: "cicd"
+    action: "Add workflow and linting but omit state notes — still blocked"
+    command: |
+      mkdir -p $WORK_DIR/.github/workflows
+      echo "name: CI" > $WORK_DIR/.github/workflows/ci.yml
+      echo '{"extends": ["eslint:recommended"]}' > $WORK_DIR/.eslintrc.json
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase cicd --project-dir $WORK_DIR
+    expected: "Exit code 1 — build, test, and verified notes are missing"
+
+  - phase: "cicd"
+    action: "Add all state notes — CI/CD gate should PASS"
+    command: |
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      notes = s['phases']['cicd']['notes']
+      notes.append('Build step configured')
+      notes.append('Test step runs on every push')
+      notes.append('Pipeline verified end-to-end')
+      p.write_text(json.dumps(s, indent=2))
+      "
+      python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase cicd --project-dir $WORK_DIR
+    expected: "Exit code 0 — CI/CD gate passes"
+
+assertions:
+  - description: "Empty project blocks requirements gate"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase requirements --project-dir $EMPTY_WORK_DIR"
+    expected: 1
+
+  - description: "Fully populated project passes requirements gate"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "Fully populated project passes development gate"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase development --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "Fully populated project passes CI/CD gate"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase cicd --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "JSON output mode produces valid JSON"
+    type: "output_contains"
+    target: "python scripts/gate_validator.py --phase requirements --project-dir $WORK_DIR --json"
+    expected: "\"passed\""
+
+tags: ["gate-validation", "blocking", "negative-test", "incremental", "requirements", "development", "cicd"]

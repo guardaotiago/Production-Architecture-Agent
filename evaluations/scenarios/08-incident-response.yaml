@@ -1,0 +1,202 @@
+name: "Production Incident Response Workflow"
+description: >
+  A production incident occurs on a running service.  This scenario exercises
+  the incident response workflow end-to-end: detection via monitoring alerts,
+  triage and severity classification, mitigation steps, root cause analysis,
+  postmortem documentation, and feeding lessons learned back into the
+  requirements phase (the SDLC feedback loop).
+
+phases_covered: [7, 1]
+project_type: "generic"
+
+setup:
+  - description: "Create a temporary project representing a live production service"
+    command: "mktemp -d /tmp/eval-incident-XXXXXX"
+  - description: "Initialise SDLC with all phases completed (service is in production)"
+    command: |
+      python $ORCHESTRATOR_ROOT/scripts/init_sdlc.py \
+        --project-name "checkout-service" --output-dir $WORK_DIR
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      for phase_id in s['phases']:
+          s['phases'][phase_id]['status'] = 'completed'
+          s['phases'][phase_id]['gate_passed'] = True
+      s['current_phase'] = 'monitoring'
+      notes = s['phases']['monitoring']['notes']
+      notes.append('Monitoring configured: Prometheus + Grafana')
+      notes.append('Dashboard created: checkout-service overview')
+      p.write_text(json.dumps(s, indent=2))
+      "
+  - description: "Create pre-existing monitoring and incident docs"
+    command: |
+      mkdir -p $WORK_DIR/docs $WORK_DIR/monitoring $WORK_DIR/incidents
+      echo "# SLO Definitions" > $WORK_DIR/docs/slo-definitions.md
+      cat > $WORK_DIR/docs/incident-response-plan.md <<'EOF'
+      # Incident Response Plan
+      ## Severity Levels
+      - SEV1: complete outage, 15-min response
+      - SEV2: degraded, 30-min response
+      ## Escalation
+      1. On-call engineer via PagerDuty
+      2. Escalate to team lead if not ack'd in 10 min
+      EOF
+      echo "groups: [{name: checkout-alerts, rules: []}]" > $WORK_DIR/monitoring/alert-rules.yml
+
+steps:
+  - phase: "monitoring"
+    action: "Simulate alert firing — HighErrorRate detected"
+    command: |
+      cat > $WORK_DIR/incidents/INC-2026-001.md <<'EOF'
+      # Incident INC-2026-001: HighErrorRate on checkout-service
+
+      ## Detection
+      - **Time**: 2026-02-05T14:32:00Z
+      - **Alert**: HighErrorRate fired — 5xx rate at 12% (threshold: 5%)
+      - **Source**: Prometheus alertmanager -> PagerDuty
+      - **On-call**: engineer-a
+
+      ## Status: INVESTIGATING
+      EOF
+    expected: "incidents/INC-2026-001.md created with detection details"
+
+  - phase: "monitoring"
+    action: "Classify severity and begin triage"
+    command: |
+      cat >> $WORK_DIR/incidents/INC-2026-001.md <<'EOF'
+
+      ## Triage
+      - **Severity**: SEV1 — checkout flow is broken for all users
+      - **Impact**: ~500 failed transactions in the last 10 minutes
+      - **Initial hypothesis**: database connection pool exhausted after deploy
+
+      ## Status: TRIAGED
+      EOF
+    expected: "Incident classified as SEV1 with initial hypothesis"
+
+  - phase: "monitoring"
+    action: "Document mitigation steps taken"
+    command: |
+      cat >> $WORK_DIR/incidents/INC-2026-001.md <<'EOF'
+
+      ## Mitigation
+      - **14:38Z** — Rolled back to previous version via canary revert
+      - **14:40Z** — Confirmed error rate dropping
+      - **14:45Z** — Error rate back to baseline (< 0.1%)
+      - **14:46Z** — Smoke tests passing on production
+
+      ## Status: MITIGATED
+      EOF
+    expected: "Mitigation steps documented, status changed to MITIGATED"
+
+  - phase: "monitoring"
+    action: "Perform root cause analysis"
+    command: |
+      cat >> $WORK_DIR/incidents/INC-2026-001.md <<'EOF'
+
+      ## Root Cause Analysis
+      A new database migration in v2.3.1 added an index creation statement that
+      ran synchronously during startup, holding exclusive locks on the orders table.
+      Under production load, this caused connection pool exhaustion within 2 minutes,
+      leading to 5xx responses on all checkout requests.
+
+      ## Contributing Factors
+      1. Migration was not tested under load in staging
+      2. Canary deployment window (10 min) was too short to catch slow-burn issues
+      3. No database-specific alerts for connection pool saturation
+      EOF
+    expected: "Root cause identified: database migration causing lock contention"
+
+  - phase: "monitoring"
+    action: "Write postmortem with action items"
+    command: |
+      cat >> $WORK_DIR/incidents/INC-2026-001.md <<'EOF'
+
+      ## Postmortem
+
+      ### Timeline
+      | Time | Event |
+      |------|-------|
+      | 14:30Z | v2.3.1 deployed via canary |
+      | 14:32Z | HighErrorRate alert fires |
+      | 14:34Z | On-call acknowledges, begins investigation |
+      | 14:38Z | Rollback initiated |
+      | 14:45Z | Error rate returns to normal |
+      | 14:46Z | All-clear declared |
+
+      ### Action Items
+      - [ ] AI-001: Add database connection pool saturation alert
+      - [ ] AI-002: Extend canary window to 30 minutes for DB migration deploys
+      - [ ] AI-003: Require load-test pass for any migration touching large tables
+      - [ ] AI-004: Add pre-deploy check that migrations are backwards-compatible
+
+      ## Status: RESOLVED
+      EOF
+    expected: "Postmortem complete with timeline and 4 action items"
+
+  - phase: "requirements"
+    action: "Feed action items back into requirements (SDLC feedback loop)"
+    command: |
+      cat > $WORK_DIR/docs/post-incident-requirements.md <<'EOF'
+      # Post-Incident Requirements — INC-2026-001
+
+      ## New Requirements (from postmortem action items)
+      1. Database connection pool monitoring alert (AI-001)
+      2. Configurable canary window duration per deploy type (AI-002)
+      3. Automated load-test gate for migration deployments (AI-003)
+      4. Backwards-compatibility linter for database migrations (AI-004)
+
+      ## Acceptance Criteria
+      - Connection pool alert fires within 1 minute of saturation
+      - Canary window is 30 min for migration deploys, 10 min otherwise
+      - Load test runs automatically on PRs containing migration files
+      - CI fails if migration is not backwards-compatible
+      EOF
+    expected: "Post-incident requirements created, closing the feedback loop"
+
+  - phase: "requirements"
+    action: "Update SDLC state to record the feedback loop"
+    command: >
+      python -c "
+      import json, pathlib
+      p = pathlib.Path('$WORK_DIR/.sdlc/state.json')
+      s = json.loads(p.read_text())
+      s['phases']['monitoring']['notes'].append('Incident INC-2026-001 resolved, postmortem complete')
+      s['phases']['requirements']['notes'].append('Post-incident requirements added from INC-2026-001')
+      p.write_text(json.dumps(s, indent=2))
+      "
+    expected: "Both monitoring and requirements phases updated with incident reference"
+
+  - phase: "monitoring"
+    action: "Verify monitoring gate still passes after incident"
+    command: "python $ORCHESTRATOR_ROOT/scripts/gate_validator.py --phase monitoring --project-dir $WORK_DIR"
+    expected: "Exit code 0 — monitoring gate remains valid"
+
+assertions:
+  - description: "Incident report file exists"
+    type: "file_exists"
+    target: "$WORK_DIR/incidents/INC-2026-001.md"
+    expected: true
+
+  - description: "Incident report contains RESOLVED status"
+    type: "output_contains"
+    target: "cat $WORK_DIR/incidents/INC-2026-001.md"
+    expected: "RESOLVED"
+
+  - description: "Post-incident requirements document exists (feedback loop)"
+    type: "file_exists"
+    target: "$WORK_DIR/docs/post-incident-requirements.md"
+    expected: true
+
+  - description: "Monitoring gate still passes"
+    type: "exit_code"
+    target: "python scripts/gate_validator.py --phase monitoring --project-dir $WORK_DIR"
+    expected: 0
+
+  - description: "State records incident in monitoring notes"
+    type: "state_check"
+    target: "$WORK_DIR/.sdlc/state.json"
+    expected: "monitoring notes contain 'INC-2026-001'"
+
+tags: ["incident-response", "monitoring", "postmortem", "feedback-loop", "rollback", "sev1"]
