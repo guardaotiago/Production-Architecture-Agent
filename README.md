@@ -4,16 +4,27 @@ A Claude Code skill repository that manages software projects from concept to pr
 
 ## Quick Start
 
+### Option A: Full guided walkthrough (recommended)
+
 ```bash
-# 1. Clone or copy into your project
-cd your-project
-cp -r /path/to/sdlc-orchestrator/.claude/ .
+# One command walks you through all 7 phases interactively
+python /path/to/Production-Architecture-Agent/scripts/orchestrate.py \
+  --project-dir ~/my-project
+```
 
-# 2. Initialize SDLC tracking
-python /path/to/sdlc-orchestrator/scripts/init_sdlc.py --project-name "My Project"
+The orchestrator will:
+- Ask you questions at each phase
+- Run scripts to generate artifacts (PRD, CI config, test plans, runbooks, alerts)
+- Validate gate criteria before advancing
+- Save progress — quit anytime with Ctrl+C, resume later
 
-# 3. Start from any phase
-# In Claude Code, use slash commands:
+### Option B: Phase-by-phase (manual)
+
+```bash
+# 1. Initialize SDLC tracking
+python /path/to/Production-Architecture-Agent/scripts/init_sdlc.py --project-name "My Project"
+
+# 2. Work through phases individually:
 /plan MyProject        # Phase 1: Requirements
 /develop               # Phase 2: Development
 /cicd github           # Phase 3: CI/CD

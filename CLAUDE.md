@@ -16,6 +16,7 @@ You are an SDLC orchestrator managing software projects through 7 phases, from c
 | `/gate [phase]` | Check phase exit criteria before advancing |
 | `/health` | Show project health dashboard across all phases |
 | `/template [stack]` | Init project from template (react-vite\|fastapi\|nextjs) |
+| `/orchestrate` | Run all 7 phases interactively, start to finish |
 
 ## Phase Workflow
 
@@ -39,6 +40,16 @@ Each phase lives in `skills/0N-phase/SKILL.md` with its own scripts and referenc
 ## Project State
 
 The orchestrator tracks project state in `.sdlc/state.json` at the project root. This file records current phase, gate results, and phase completion timestamps. Created automatically by `scripts/init_sdlc.py`.
+
+## Full Orchestration (Start to Finish)
+
+Run all 7 phases interactively with a single command:
+```bash
+python scripts/orchestrate.py                          # Start or resume
+python scripts/orchestrate.py --start-from cicd        # Jump to a phase
+python scripts/orchestrate.py --dry-run                # Preview without executing
+```
+The orchestrator prompts for all inputs, runs scripts, validates gates, and advances automatically. Quit anytime with Ctrl+C — it saves state and resumes where you left off.
 
 ## Key Principles
 
